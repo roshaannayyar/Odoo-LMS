@@ -1,0 +1,15 @@
+.git
+.github
+.odoo-data
+odoo-venv
+node_modules
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.DS_Store
+debian
+doc
+setup/win32
+odoo.conf
+README.md
