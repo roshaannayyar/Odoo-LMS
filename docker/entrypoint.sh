@@ -14,6 +14,35 @@ MIGRATION_FILESTORE=/opt/odoo/migration/roshaan_filestore.tar.gz
 if [ "$1" = "odoo" ] || [ "$1" = "odoo-bin" ]; then
     shift
 
+    # Odoo refuses to run as the Postgres superuser (a real security check, not
+    # optional). Managed Postgres plugins (e.g. Railway) often only expose the
+    # superuser, so bootstrap a dedicated least-privilege role on first boot,
+    # using the superuser creds we already have — this needs no external
+    # network access beyond what the container already has to Postgres.
+    if [ "$PGUSER" = "postgres" ] && [ -n "$PGDATABASE" ] && [ -n "$PGHOST" ]; then
+        APP_USER=odoo_app
+        PW_FILE="$DATA_DIR/.odoo_app_pgpass"
+        mkdir -p "$DATA_DIR"
+        if [ -f "$PW_FILE" ]; then
+            APP_PASSWORD=$(cat "$PW_FILE")
+        else
+            APP_PASSWORD=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
+            echo "$APP_PASSWORD" > "$PW_FILE"
+            chmod 600 "$PW_FILE"
+        fi
+        role_exists=$(PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "${PGPORT:-5432}" -U "$PGUSER" -d "$PGDATABASE" \
+            -tAc "SELECT 1 FROM pg_roles WHERE rolname='$APP_USER'" 2>/dev/null)
+        if [ "$role_exists" != "1" ]; then
+            echo "entrypoint: bootstrapping non-superuser role '$APP_USER'..."
+            PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "${PGPORT:-5432}" -U "$PGUSER" -d "$PGDATABASE" \
+                -c "CREATE ROLE $APP_USER WITH LOGIN PASSWORD '$APP_PASSWORD' CREATEDB;" \
+                -c "GRANT ALL PRIVILEGES ON DATABASE $PGDATABASE TO $APP_USER;" \
+                -c "ALTER DATABASE $PGDATABASE OWNER TO $APP_USER;"
+        fi
+        export PGUSER="$APP_USER"
+        export PGPASSWORD="$APP_PASSWORD"
+    fi
+
     if [ -n "$PGDATABASE" ] && [ -n "$PGHOST" ]; then
         echo "entrypoint: checking whether database '$PGDATABASE' has an Odoo schema..."
         if ! PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "${PGPORT:-5432}" -U "$PGUSER" -d "$PGDATABASE" -tAc \
